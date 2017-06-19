@@ -1,0 +1,2 @@
+#define NUM_PRELINKED_OBJECTS 1
+DEFINE_REGISTER_FUNC(_66_tmpxft_00000df5_00000000_17_cuda_device_runtime_compute_61_cpp1_ii_8b1a5d37)
