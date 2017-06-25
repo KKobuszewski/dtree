@@ -73,7 +73,7 @@ __global__ void kernel_find_classes_counts_tot(uint8_t* classes, int* storage, c
     // load data
     int _classes[ITEMS_PER_THREAD] = {0};
     for (int it=0; it < ITEMS_PER_THREAD; it++)
-        _classes[it] = (int) classes[idx*ITEMS_PER_THREAD + it];
+        _classes[it] = (int) classes[idx*ITEMS_PER_THREAD + it]; // TODO: Make extensible to cases where rows is not a multiple of ITEMS_PER_THREAD
     
     // clear memory
     if (idx < NUM_CLASSES) storage[idx] = 0;
@@ -481,7 +481,7 @@ __global__ void kernel_find_split(int* fractions, int* storage, int* group_sizes
 
 
 
-void DecisionTree::find_condition(unsigned* _feature, real_t* _cond)
+void DecisionTree::find_condition(unsigned* _feature, real_t* _cond, const unsigned group_rows, const unsigned data_offset)
 {
     cuErrCheck(  cudaMemset(d_fractions, 0, sizeof(int)  * NUM_SPLITS*NUM_CLASSES*_cols)  );
     cuErrCheck(  cudaMemset(d_group_sizes, 0, sizeof(int)  * NUM_SPLITS*_cols)  );
@@ -490,18 +490,23 @@ void DecisionTree::find_condition(unsigned* _feature, real_t* _cond)
     int* d_storage = (int*) d_workspace;
     
     
-    int num_blocks = DIV_UP(_rows,BLOCK_SIZE*ITEMS_PER_THREAD);
-    //kernel_find_classes_counts_tot<<< dim3(num_blocks,1,1), dim3(BLOCK_SIZE,1,1) >>>(d_classes, d_storage, _rows); // 9.6960us
-    kernel_find_classes_counts_tot1<<< dim3(num_blocks,1,1), dim3(BLOCK_SIZE,1,1) >>>((int*)d_classes, d_storage, _rows); // 3.8080us, 2.5x faster
+    int num_blocks = DIV_UP(group_rows,BLOCK_SIZE*ITEMS_PER_THREAD);
+    if (group_rows%4)
+    {
+        kernel_find_classes_counts_tot<<< dim3(num_blocks,1,1), dim3(BLOCK_SIZE,1,1) >>>(d_classes, d_storage, _rows); // 9.6960us
+    }
+    else
+    {
+        kernel_find_classes_counts_tot1<<< dim3(num_blocks,1,1), dim3(BLOCK_SIZE,1,1) >>>((int*)d_classes, d_storage, group_rows); // 3.8080us, 2.5x faster
+    }
     
-    
-    const dim3 blocks_grid( NUM_BLOCKS(_rows), _cols, 1 );
+    const dim3 blocks_grid( NUM_BLOCKS(group_rows), _cols, 1 );
     const dim3 block_size ( BLOCK_SIZE, 1, 1 );
     
     printf("blocks grid: (%4d,%4d,%4d)\n",blocks_grid.x,blocks_grid.y,blocks_grid.z);
     printf("block size:  (%4d,%4d,%4d)\n",block_size.x, block_size.y, block_size.z );
     
-    kernel_find_fractions<<< blocks_grid, block_size >>>(d_data,d_classes, d_fractions, d_group_sizes,_rows,_cols);
+    kernel_find_fractions<<< blocks_grid, block_size >>>(d_data,d_classes, d_fractions, d_group_sizes,group_rows,_cols);
     cuErrCheck( cudaDeviceSynchronize() );
     
     
@@ -608,75 +613,72 @@ struct checkCondition //: public thrust::unary_function<real_t,bool>
 
 
 
-template <typename T>
-inline  int make_partition_many( T* d_data, 
-                                 T* d_result, 
-                                 T condition,
-                                 const unsigned rows, const unsigned cols, const unsigned feature )
+
+
+/*
+ * 
+ * We need to rearnage in linear memory...
+ * | ----------------------------- |
+ * | ----------------------------- |
+ * | ----------------------------- |
+ * | ----------------------------- |
+ * 
+ * Linear memory:                        Logical partition:
+ * | xxxxx | xxxxxx| xxxxx | xxxxx |     | xxxxx |      | --------------------- |
+ * | --------------------- | ------      | xxxxx |      | --------------------- |
+ *  -------------- | --------------      | xxxxx |      | --------------------- |
+ *  ------ | --------------------- |     | xxxxx |      | --------------------- |
+ *
+ * @param
+ * 
+ * @return            number of elements in group 0/1? 
+ */
+template <typename T1, typename T2>
+inline  int make_partition( T1* d_classes,
+                            T1* d_new_classes, 
+                            T2* d_data, 
+                            T2* d_new_data,
+                            T2 condition,
+                            const unsigned rows, const unsigned cols, const unsigned feature )
 {
-    /*
-     * TODO: Must be done differently!
-     * TODO: Number of items in each group must be known before...
-     * === Now rearanges data row by row!!! ===
-     * We need to rearnage in linear memory...
-     * | ----------------------------- |
-     * | ----------------------------- |
-     * | ----------------------------- |
-     * | ----------------------------- |
-     * 
-     * Linear memory:                        Logical partition:
-     * | xxxxx | xxxxxx| xxxxx | xxxxx |     | xxxxx |      | --------------------- |
-     * | --------------------- | ------      | xxxxx |      | --------------------- |
-     *  -------------- | --------------      | xxxxx |      | --------------------- |
-     *  ------ | --------------------- |     | xxxxx |      | --------------------- |
-     * 
-     */
-    int size_group_0 = 0;
+    int size_group_0, size_group_1;
+    
+    // first partiotion on classes and get number of elements in each group
+    typename  thrust::detail::normal_iterator<thrust::device_ptr<T1>> last_copied;
+    last_copied = thrust::copy_if(thrust::device_pointer_cast(d_classes),        // begining of data chunk to copy
+                                  thrust::device_pointer_cast(d_classes+rows),   // end of data chunk to copy
+                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
+                                  thrust::device_pointer_cast(d_new_classes),         // where to copy
+                                  checkCondition<false,T2>(condition));
+    size_group_0 = last_copied - 
+                   typename thrust::device_vector<T1, thrust::device_malloc_allocator<T1>>::
+                   iterator(thrust::device_pointer_cast(d_new_classes));
+    size_group_1 = rows - size_group_0;
+    
+    thrust::remove_copy_if(       thrust::device_pointer_cast(d_classes),        // begining of data chunk to copy
+                                  thrust::device_pointer_cast(d_classes+rows),   // end of data chunk to copy
+                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
+                                  last_copied,                                        // where to copy
+                                  checkCondition<false,T2>(condition));
+    
+    
     // TODO: use openmp and make default stream to be different for each host thread ?
     #pragma omp parallel for num_threads(4)
     for (unsigned it=0; it < cols; it++)
     {
-        thrust::detail::normal_iterator<thrust::device_ptr<real_t>> last_copied;
-        last_copied = thrust::copy_if(thrust::device_pointer_cast(d_data+it*rows),        // begining of data chunk to copy
-                                      thrust::device_pointer_cast(d_data+(it+1)*rows),  // end of data chunk to copy
-                                      thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
-                                      thrust::device_pointer_cast(d_result+it*rows),      // where to copy
-                                      checkCondition<true,T>(condition));
-        thrust::remove_copy_if( thrust::device_pointer_cast(d_data+it*rows),              // begining of data
-                                thrust::device_pointer_cast(d_data+(it+1)*rows),        // end of data
-                                thrust::device_pointer_cast(d_data+feature*rows),         // feature
-                                last_copied,                                              // iterator pointing to the end of 
-                                checkCondition<true,T>(condition));
-    
-        if (omp_get_thread_num() == 0)
-           size_group_0 = last_copied - thrust::device_vector<real_t>::iterator(thrust::device_pointer_cast(d_result));
+        thrust::copy_if(        thrust::device_pointer_cast(d_data+it*rows),                     // begining of data chunk to copy
+                                thrust::device_pointer_cast(d_data+(it+1)*rows),                 // end of data chunk to copy
+                                thrust::device_pointer_cast(d_data+feature*rows),                // the feature we want to check condition
+                                thrust::device_pointer_cast(d_new_data+it*size_group_0),         // where to copy
+                                checkCondition<false,T2>(condition));
+        thrust::remove_copy_if( thrust::device_pointer_cast(d_data+it*rows),                     // begining of data
+                                thrust::device_pointer_cast(d_data+(it+1)*rows),                 // end of data
+                                thrust::device_pointer_cast(d_data+feature*rows),                // feature
+                                thrust::device_pointer_cast(d_new_data +
+                                                            cols*size_group_0+it*size_group_1),  // iterator pointing to the end of 
+                                checkCondition<false,T2>(condition));
     }
     
-    return size_group_0;
-}
-
-template <typename T1, typename T2>
-inline  int make_partition_one ( T1* d_to_partition,
-                                 T1* d_result, 
-                                 T2* d_data, 
-                                 T2 condition,
-                                 const unsigned rows, const unsigned cols, const unsigned feature )
-{
-    int size_group_0 = 0;
-    typename  thrust::detail::normal_iterator<thrust::device_ptr<T1>> last_copied;
-    last_copied = thrust::copy_if(thrust::device_pointer_cast(d_to_partition),        // begining of data chunk to copy
-                                  thrust::device_pointer_cast(d_to_partition+rows),   // end of data chunk to copy
-                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
-                                  thrust::device_pointer_cast(d_result),              // where to copy
-                                  checkCondition<true,T2>(condition));
-    size_group_0 = last_copied - 
-                   typename thrust::device_vector<T1, thrust::device_malloc_allocator<T1>>::
-                   iterator(thrust::device_pointer_cast(d_result));
-    thrust::remove_copy_if(       thrust::device_pointer_cast(d_to_partition),        // begining of data chunk to copy
-                                  thrust::device_pointer_cast(d_to_partition+rows),   // end of data chunk to copy
-                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
-                                  last_copied,                                        // where to copy
-                                  checkCondition<true,T2>(condition));
     
     
     return size_group_0;
@@ -830,7 +832,7 @@ void DecisionTree::build_tree_CART()
     
     
     unsigned node_id = 0;
-    for (unsigned it=0; it < 1; it++)
+    for (unsigned it=0; it < 4; it++)
     {
         // simpliest solution for partitioning
         cuErrCheck(  cudaMemcpy(d_classes_cpy, d_classes, sizeof(uint8_t) * _rows,       cudaMemcpyDeviceToDevice)  );
@@ -851,21 +853,23 @@ void DecisionTree::build_tree_CART()
             h_left_childreen[node_id] = left_child;
             
             unsigned data_offset = 0;
-            for (unsigned kt=0; kt<jt; kt++)
+            for (unsigned kt=1; kt<=jt; kt++)
             {
                 data_offset += h_rows_array[node_id - kt];
             }
+            std::cout << "node: " << node_id << "\t rows: " << h_rows_array[node_id] << "\tdata_offset: " << data_offset << std::endl;
             
-            this->find_condition( h_features+node_id,
-                                  h_conditions+node_id );
+            this->find_condition( h_features   + node_id,
+                                  h_conditions + node_id,
+                                  h_rows_array[node_id],
+                                  data_offset );
             
             real_t cond = h_conditions[node_id];
             int feature = h_features[node_id];
             
             // make partition
             int size_group_0;
-            size_group_0 = make_partition_one<uint8_t,real_t>(d_classes_cpy,d_classes,d_data,cond,_rows,_cols,feature);
-            size_group_0 = make_partition_many(d_data_cpy,  d_data,          cond,_rows,_cols,feature);
+            size_group_0 = make_partition<uint8_t,real_t>(d_classes_cpy,d_classes,d_data_cpy, d_data, cond,_rows,_cols,feature);
             
             
             h_rows_array[left_child]   = size_group_0;
@@ -941,6 +945,89 @@ void DecisionTree::build_tree_CART2()
     }
 }
  */
+
+
+
+
+
+
+void DecisionTree::one_split()
+{
+    
+    unsigned *h_rows_array     = this->dtree_structure->h_rows;
+    unsigned *h_features       = this->dtree_structure->h_features;
+    unsigned *h_left_childreen = this->dtree_structure->h_left_childreen;
+    real_t   *h_conditions     = this->dtree_structure->h_conditions;
+    
+    h_rows_array[0] = _rows; 
+    
+    
+    unsigned node_id = 0;
+    for (unsigned it=0; it < 1; it++)
+    {
+        // simpliest solution for partitioning
+        cuErrCheck(  cudaMemcpy(d_classes_cpy, d_classes, sizeof(uint8_t) * _rows,       cudaMemcpyDeviceToDevice)  );
+        cuErrCheck(  cudaMemcpy(d_data_cpy,    d_data,    sizeof(real_t)  * _rows*_cols, cudaMemcpyDeviceToDevice)  );
+        
+        // TODO: Here #pragma omp parallel for !!!
+        if (h_rows_array[node_id] < ITEMS_PER_THREAD)
+        {
+            continue;
+        }
+        
+        // musimy znac liczbe danych po podziale, by wiedziec o ile przesunac wskaznik!
+        unsigned left_child = 1; 
+        h_left_childreen[node_id] = left_child;
+        
+        this->find_condition( h_features+node_id,
+                              h_conditions+node_id,
+                              h_rows_array[node_id] );
+        
+        real_t cond = h_conditions[node_id];
+        int feature = h_features[node_id];
+        
+        // make partition
+        int size_group_0;
+        size_group_0 = make_partition<uint8_t,real_t>(d_classes_cpy,d_classes,d_data_cpy, d_data, cond,_rows,_cols,feature);
+        
+        h_rows_array[left_child]   = size_group_0;
+        h_rows_array[left_child+1] = h_rows_array[node_id] - size_group_0;
+        
+        node_id++; // go to next node in binary tree
+    }
+    std::cout << "=====================================================================================================================" << std::endl;
+    std::cout << std::endl;
+    
+    // next
+    // TODO: rows = ...; // update number of rows!
+        
+    
+    std::cout << std::endl;
+    std::cout << std::endl;
+    std::cout << std::endl;
+    
+    // print results
+    std::cout << "rows at different levels:" << std::endl;
+    node_id = 0;
+    for (unsigned it=0; it < 2; it++)
+    {
+        for (unsigned jt =0; jt < pow(2,it); jt++)
+        {
+            std::cout << h_rows_array[node_id] << "\t";
+            node_id++;
+        }
+        std::cout << std::endl;
+    }
+    std::cout << std::endl;
+}
+
+
+
+
+
+
+
+
 
 
 #endif

@@ -77,26 +77,6 @@ int main(int argc, char* argv[])
     
     
     
-    dtree->import_data_to_host();
-    std::cout << std::fixed;
-    for (unsigned ii=0; ii < rows; ii+=4)
-    {
-        std::cout << ii << ".\t";
-        for (jj=0; jj < cols; jj++)
-            std::cout << h_data[ii+jj*rows] << "\t";
-        std::cout << ((unsigned) h_classes[ii]) << std::endl;
-    }
-    std::cout << "max\t";
-    for (jj=0; jj < cols; jj++)
-        std::cout << *std::max_element(h_data+jj*rows,
-                                       h_data+(jj+1)*rows) << "\t";
-    std::cout << std::endl;
-    std::cout << "min\t";
-    for (jj=0; jj < cols; jj++)
-        std::cout << *std::min_element(h_data+jj*rows,
-                                       h_data+(jj+1)*rows) << "\t";
-    std::cout << std::endl;
-    
     
     delete dtree;
     

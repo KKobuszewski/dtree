@@ -32,10 +32,6 @@ __asm(".align 2");
 __asm(".align 2");
 # 74 "/usr/local/cuda/include/thrust/detail/pointer.inl"
 __asm(".align 2");
-# 30 "/usr/local/cuda/include/thrust/detail/pointer.inl"
-__asm(".align 2");
-
-__asm(".align 2");
 # 82 "/usr/local/cuda/include/thrust/detail/pointer.inl"
 __asm(".align 2");
 # 38 "/usr/local/cuda/include/thrust/detail/pointer.inl"
@@ -275,34 +271,6 @@ __asm(".align 2");
 # 205 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
 __asm(".align 2");
 # 308 "/usr/local/cuda/include/thrust/iterator/transform_iterator.h"
-__asm(".align 2");
-# 312 "/usr/local/cuda/include/thrust/iterator/iterator_facade.h"
-__asm(".align 2");
-# 340 "/usr/local/cuda/include/thrust/iterator/iterator_facade.h"
-__asm(".align 2");
-# 144 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
-__asm(".align 2");
-
-__asm(".align 2");
-
-
-
-
-__asm(".align 2");
-
-__asm(".align 2");
-# 169 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
-__asm(".align 2");
-# 191 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
-__asm(".align 2");
-# 205 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
-__asm(".align 2");
-
-
-
-
-__asm(".align 2");
-# 224 "/usr/local/cuda/include/thrust/iterator/iterator_adaptor.h"
 __asm(".align 2");
 # 76 "/usr/local/cuda/include/thrust/iterator/detail/zip_iterator.inl"
 __asm(".align 2");

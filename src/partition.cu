@@ -136,6 +136,67 @@ void make_partition_many( T* d_data,
 }
 
 
+template <typename T>
+inline  int make_partition_many2( T* d_data, 
+                                 T* d_result, 
+                                 T condition,
+                                 const unsigned rows, const unsigned cols, const unsigned feature )
+{
+    int size_group_0 = 0;
+    // TODO: use openmp and make default stream to be different for each host thread ?
+    #pragma omp parallel for num_threads(4)
+    for (unsigned it=0; it < cols; it++)
+    {
+        thrust::detail::normal_iterator<thrust::device_ptr<real_t>> last_copied;
+        last_copied = thrust::copy_if(thrust::device_pointer_cast(d_data+it*rows),        // begining of data chunk to copy
+                                      thrust::device_pointer_cast(d_data+(it+1)*rows),  // end of data chunk to copy
+                                      thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
+                                      thrust::device_pointer_cast(d_result+it*rows),      // where to copy
+                                      checkCondition<true,T>(condition));
+        thrust::remove_copy_if( thrust::device_pointer_cast(d_data+it*rows),              // begining of data
+                                thrust::device_pointer_cast(d_data+(it+1)*rows),        // end of data
+                                thrust::device_pointer_cast(d_data+feature*rows),         // feature
+                                last_copied,                                              // iterator pointing to the end of 
+                                checkCondition<true,T>(condition));
+    
+        if (omp_get_thread_num() == 0)
+           size_group_0 = last_copied - thrust::device_vector<real_t>::iterator(thrust::device_pointer_cast(d_result));
+    }
+    
+    return size_group_0;
+}
+
+
+template <typename T1, typename T2>
+inline  int make_partition_one ( T1* d_to_partition,
+                                 T1* d_result, 
+                                 T2* d_data, 
+                                 T2 condition,
+                                 const unsigned rows, const unsigned cols, const unsigned feature )
+{
+    int size_group_0 = 0;
+    
+    // make partition on classes and find size of groups
+    typename  thrust::detail::normal_iterator<thrust::device_ptr<T1>> last_copied;
+    last_copied = thrust::copy_if(thrust::device_pointer_cast(d_to_partition),        // begining of data chunk to copy
+                                  thrust::device_pointer_cast(d_to_partition+rows),   // end of data chunk to copy
+                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
+                                  thrust::device_pointer_cast(d_result),              // where to copy
+                                  checkCondition<true,T2>(condition));
+    size_group_0 = last_copied - 
+                   typename thrust::device_vector<T1, thrust::device_malloc_allocator<T1>>::
+                   iterator(thrust::device_pointer_cast(d_result));
+    thrust::remove_copy_if(       thrust::device_pointer_cast(d_to_partition),        // begining of data chunk to copy
+                                  thrust::device_pointer_cast(d_to_partition+rows),   // end of data chunk to copy
+                                  thrust::device_pointer_cast(d_data+feature*rows),   // the feature we want to check condition
+                                  last_copied,                                        // where to copy
+                                  checkCondition<true,T2>(condition));
+    
+    
+    return size_group_0;
+}
+
+
 
 template <typename T>
 inline void print_thrust_vector(thrust::device_ptr<T> vec_beg,thrust::device_ptr<T> vec_end)

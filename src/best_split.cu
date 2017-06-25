@@ -73,16 +73,35 @@ int main(int argc, char* argv[])
     
     std::cout << std::endl;
     
-    for (unsigned it=0; it < 1; it++)
-        dtree->find_condition();
+    dtree->one_split();
     
-    /*
-    unsigned feature = 0;
-    find_condition(thrust::raw_pointer_cast(&d_data_mem[0]),
-                   thrust::raw_pointer_cast(&d_classes[0]),
-                   rows, cols, feature);
     
-    */
+    unsigned *h_rows_array = dtree->dtree_structure->h_rows;
+    dtree->import_data_to_host();
+    
+    std::cout << std::fixed;
+    for (unsigned ii=0; ii < h_rows_array[1]; ii+=4)
+    {
+        std::cout << ii << ".\t";
+        for (jj=0; jj < cols; jj++)
+            std::cout << h_data[ii+jj*h_rows_array[1]] << "\t";
+        std::cout << ((unsigned) h_classes[ii]) << std::endl;
+    }
+    std::cout << std::endl;
+    std::cout << std::endl;
+    
+    real_t* h_data_cpy = h_data+h_rows_array[1]*cols;
+    
+    std::cout << std::fixed;
+    for (unsigned ii=0; ii < h_rows_array[2]; ii+=4)
+    {
+        std::cout << ii << ".\t";
+        for (jj=0; jj < cols; jj++)
+            std::cout << h_data_cpy[ ii+jj*h_rows_array[2] ] << "\t";
+        std::cout << ((unsigned) h_classes[ii+h_rows_array[1]]) << std::endl;
+    }
+    std::cout << std::endl;
+    
     
     delete dtree;
     

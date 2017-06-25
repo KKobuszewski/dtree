@@ -273,12 +273,15 @@ public:
     
     
     
-    void find_condition(unsigned* _feature, real_t* _cond);
+    void find_condition(unsigned* _feature,
+                        real_t* _cond,
+                        const unsigned group_rows, 
+                        const unsigned data_offset=0);
     
     void build_tree_CART();
     void build_tree_CART2();
     
-    
+    void one_split();
     
     
     
